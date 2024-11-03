@@ -234,7 +234,7 @@ class EmotionDetector(VideoTransformerBase):
                         (10, 30),  # Position
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1.0,
-                        (30,144,255),
+                        (1, 41, 105),
                         2,
                         cv2.LINE_AA,
                     )
