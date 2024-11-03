@@ -19,3 +19,5 @@ asyncio
 typing_extensions
 python-socketio
 watchdog
+opencv-python
+mtcnn
