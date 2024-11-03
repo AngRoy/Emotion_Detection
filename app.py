@@ -2,7 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 from fer import FER
-from streamlit_webrtc import VideoProcessorBase, webrtc_streamer, WebRtcMode, ClientSettings
+from streamlit_webrtc import VideoTransformerBase, webrtc_streamer, WebRtcMode, ClientSettings
 import av
 import threading
 import time  # Import time module for timing prompts
@@ -104,7 +104,7 @@ WEBRTC_CLIENT_SETTINGS = ClientSettings(
 )
 
 
-class EmotionDetector(VideoProcessorBase):
+class EmotionDetector(VideoTransformerBase):
     def __init__(self):
         self.detector = FER(mtcnn=True)
         self.emotion_counts = {
@@ -234,7 +234,7 @@ class EmotionDetector(VideoProcessorBase):
                         (10, 30),  # Position
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1.0,
-                        (255, 255, 255),
+                        (30,144,255),
                         2,
                         cv2.LINE_AA,
                     )
@@ -257,26 +257,26 @@ def main():
             key="emotion-detection",
             mode=WebRtcMode.SENDRECV,
             client_settings=WEBRTC_CLIENT_SETTINGS,
-            video_processor_factory=EmotionDetector,
+            video_transformer_factory=EmotionDetector,
             async_processing=True,
         )
 
     with col2:
         if ctx.state.playing:
-            if ctx.video_processor:
-                ctx.video_processor.emotion_detection_enabled = (
-                    emotion_detection_enabled
+            if ctx.video_transformer:
+                ctx.video_transformer.emotion_detection_enabled = (
+                    st.session_state["emotion_detection_enabled"]
                 )
 
-                if show_emotion_stats:
-                    with ctx.video_processor.lock:
-                        emotion_counts = ctx.video_processor.emotion_counts.copy()
+                if st.session_state["show_emotion_stats"]:
+                    with ctx.video_transformer.lock:
+                        emotion_counts = ctx.video_transformer.emotion_counts.copy()
                     st.subheader("📊 Emotion Statistics")
                     st.bar_chart(emotion_counts)
 
-                with ctx.video_processor.lock:
-                    current_emotion = ctx.video_processor.current_emotion
-                    current_confidence = ctx.video_processor.current_confidence
+                with ctx.video_transformer.lock:
+                    current_emotion = ctx.video_transformer.current_emotion
+                    current_confidence = ctx.video_transformer.current_confidence
 
                 st.subheader("😊 Current Emotion")
                 if current_emotion:
