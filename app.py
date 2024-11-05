@@ -18,6 +18,10 @@ import time
 warnings.filterwarnings("ignore")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow logging
 
+# Initialize FER globally in the main thread
+# This ensures Keras initializes its global state correctly
+global_detector = FER(mtcnn=False)
+
 # Set page configuration
 st.set_page_config(
     page_title="Real-Time Emotion Detection",
@@ -103,6 +107,8 @@ with st.sidebar.expander("⚙️ Settings", expanded=True):
         value=3,
         help="Process every nth frame to improve performance.",
     )
+    # Save detection_interval to session_state
+    st.session_state["detection_interval"] = detection_interval
 
 # Custom Client Settings for WebRTC
 WEBRTC_CLIENT_SETTINGS = ClientSettings(
@@ -124,11 +130,13 @@ WEBRTC_CLIENT_SETTINGS = ClientSettings(
 
 class EmotionDetector(VideoProcessorBase):
     def __init__(self):
+        super().__init__()
         # Use OpenCV's Haar Cascade classifier for faster face detection
         self.face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
-        self.detector = FER(mtcnn=False)  # Set mtcnn=False for faster processing
+        # Reference the globally initialized FER detector
+        self.detector = global_detector
         self.emotion_counts = {
             "angry": 0,
             "disgust": 0,
@@ -205,72 +213,76 @@ class EmotionDetector(VideoProcessorBase):
         if self.emotion_detection_enabled:
             self.frame_count += 1
             if self.frame_count % self.detection_interval == 0:
-                # Resize frame for faster processing
-                small_img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
-                gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
+                try:
+                    # Resize frame for faster processing
+                    small_img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
+                    gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
 
-                # Detect faces
-                faces = self.face_cascade.detectMultiScale(
-                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-                )
+                    # Detect faces
+                    faces = self.face_cascade.detectMultiScale(
+                        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+                    )
 
-                if len(faces) > 0:
-                    for (x, y, w, h) in faces:
-                        x *= 2
-                        y *= 2
-                        w *= 2
-                        h *= 2
-                        face_img = img[y : y + h, x : x + w]
+                    if len(faces) > 0:
+                        for (x, y, w, h) in faces:
+                            x *= 2
+                            y *= 2
+                            w *= 2
+                            h *= 2
+                            face_img = img[y : y + h, x : x + w]
 
-                        # Detect emotion on the face region
-                        emotion_scores = self.detector.detect_emotions(face_img)
-                        if emotion_scores:
-                            emotion = emotion_scores[0]["emotions"]
-                            dominant_emotion = max(emotion, key=emotion.get)
-                            score = emotion[dominant_emotion]
+                            # Detect emotion on the face region
+                            emotion_scores = self.detector.detect_emotions(face_img)
+                            if emotion_scores:
+                                emotion = emotion_scores[0]["emotions"]
+                                dominant_emotion = max(emotion, key=emotion.get)
+                                score = emotion[dominant_emotion]
 
-                            # Update emotion counts with lock
-                            with self.lock:
-                                if dominant_emotion in self.emotion_counts:
-                                    self.emotion_counts[dominant_emotion] += 1
-                                else:
-                                    self.emotion_counts[dominant_emotion] = 1
-                                self.current_emotion = dominant_emotion
-                                self.current_confidence = score
-
-                            # Draw rectangle around the face
-                            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                            # Put emotion text
-                            cv2.putText(
-                                img,
-                                f"{dominant_emotion} ({score*100:.1f}%)",
-                                (x, y - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.9,
-                                (255, 0, 0),
-                                2,
-                                cv2.LINE_AA,
-                            )
-
-                            # Update prompt if interval has passed
-                            if self.current_emotion and (
-                                time.time() - self.last_prompt_time > self.prompt_interval
-                            ):
+                                # Update emotion counts with lock
                                 with self.lock:
-                                    prompts = self.fun_prompts.get(self.current_emotion, [])
-                                    if prompts:
-                                        self.current_prompt = np.random.choice(prompts)
+                                    if dominant_emotion in self.emotion_counts:
+                                        self.emotion_counts[dominant_emotion] += 1
                                     else:
-                                        self.current_prompt = ""
-                                    self.last_prompt_time = time.time()
+                                        self.emotion_counts[dominant_emotion] = 1
+                                    self.current_emotion = dominant_emotion
+                                    self.current_confidence = score
 
-                else:
-                    # If no face is detected, reset current_emotion and prompt
-                    with self.lock:
-                        self.current_emotion = None
-                        self.current_confidence = 0.0
-                        self.current_prompt = ""
+                                # Draw rectangle around the face
+                                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+                                # Put emotion text
+                                cv2.putText(
+                                    img,
+                                    f"{dominant_emotion} ({score*100:.1f}%)",
+                                    (x, y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.9,
+                                    (255, 0, 0),
+                                    2,
+                                    cv2.LINE_AA,
+                                )
+
+                                # Update prompt if interval has passed
+                                if self.current_emotion and (
+                                    time.time() - self.last_prompt_time > self.prompt_interval
+                                ):
+                                    with self.lock:
+                                        prompts = self.fun_prompts.get(self.current_emotion, [])
+                                        if prompts:
+                                            self.current_prompt = np.random.choice(prompts)
+                                        else:
+                                            self.current_prompt = ""
+                                        self.last_prompt_time = time.time()
+
+                    else:
+                        # If no face is detected, reset current_emotion and prompt
+                        with self.lock:
+                            self.current_emotion = None
+                            self.current_confidence = 0.0
+                            self.current_prompt = ""
+                except Exception as e:
+                    # Log the exception if needed
+                    print(f"Error during emotion detection: {e}")
 
         # Draw the prompt on the image
         if self.current_prompt:
