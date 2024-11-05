@@ -13,13 +13,16 @@ from streamlit_webrtc import (
 import av
 import threading
 import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 
 # Suppress warnings and logs
 warnings.filterwarnings("ignore")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow logging
 
 # Initialize FER globally in the main thread
-# This ensures Keras initializes its global state correctly
 global_detector = FER(mtcnn=False)
 
 # Set page configuration
@@ -127,7 +130,6 @@ WEBRTC_CLIENT_SETTINGS = ClientSettings(
     },
 )
 
-
 class EmotionDetector(VideoProcessorBase):
     def __init__(self):
         super().__init__()
@@ -207,6 +209,10 @@ class EmotionDetector(VideoProcessorBase):
         self.last_prompt_time = time.time()
         self.prompt_interval = 5  # seconds
 
+        # Initialize emotion update cooldown
+        self.last_emotion_update_time = time.time()
+        self.emotion_cooldown = 2  # seconds
+
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
 
@@ -238,14 +244,24 @@ class EmotionDetector(VideoProcessorBase):
                                 dominant_emotion = max(emotion, key=emotion.get)
                                 score = emotion[dominant_emotion]
 
+                                current_time = time.time()
+
                                 # Update emotion counts with lock
                                 with self.lock:
                                     if dominant_emotion in self.emotion_counts:
                                         self.emotion_counts[dominant_emotion] += 1
                                     else:
                                         self.emotion_counts[dominant_emotion] = 1
-                                    self.current_emotion = dominant_emotion
-                                    self.current_confidence = score
+
+                                    # Check if cooldown period has passed
+                                    if (
+                                        dominant_emotion != self.current_emotion
+                                        and (current_time - self.last_emotion_update_time)
+                                        >= self.emotion_cooldown
+                                    ):
+                                        self.current_emotion = dominant_emotion
+                                        self.current_confidence = score
+                                        self.last_emotion_update_time = current_time
 
                                 # Draw rectangle around the face
                                 cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
@@ -253,7 +269,7 @@ class EmotionDetector(VideoProcessorBase):
                                 # Put emotion text
                                 cv2.putText(
                                     img,
-                                    f"{dominant_emotion} ({score*100:.1f}%)",
+                                    f"{self.current_emotion.capitalize()} ({self.current_confidence*100:.1f}%)",
                                     (x, y - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX,
                                     0.9,
@@ -264,7 +280,7 @@ class EmotionDetector(VideoProcessorBase):
 
                                 # Update prompt if interval has passed
                                 if self.current_emotion and (
-                                    time.time() - self.last_prompt_time > self.prompt_interval
+                                    current_time - self.last_prompt_time > self.prompt_interval
                                 ):
                                     with self.lock:
                                         prompts = self.fun_prompts.get(self.current_emotion, [])
@@ -272,7 +288,7 @@ class EmotionDetector(VideoProcessorBase):
                                             self.current_prompt = np.random.choice(prompts)
                                         else:
                                             self.current_prompt = ""
-                                        self.last_prompt_time = time.time()
+                                        self.last_prompt_time = current_time
 
                     else:
                         # If no face is detected, reset current_emotion and prompt
@@ -280,9 +296,10 @@ class EmotionDetector(VideoProcessorBase):
                             self.current_emotion = None
                             self.current_confidence = 0.0
                             self.current_prompt = ""
+
                 except Exception as e:
                     # Log the exception if needed
-                    print(f"Error during emotion detection: {e}")
+                    logging.error(f"Error during emotion detection: {e}")
 
         # Draw the prompt on the image
         if self.current_prompt:
